@@ -41,7 +41,7 @@ use Getopt::Std;             # getopts()
 use File::Path;              # mkpath(), rmtree()
 use File::stat;              # stat(), lstat()
 use POSIX qw(locale_h);      # setlocale()
-use Fcntl;                   # sysopen()
+use Fcntl qw(:flock);        # sysopen() / flock()
 use IO::File;                # recursive open in parse_config_file
 use IPC::Open3 qw(open3);    #open rsync with error output
 use IO::Handle;              # handle autoflush for rsync-output
@@ -119,13 +119,13 @@ my @reserved_words = qw(
 # global flags that change the outcome of the program,
 # and are configurable by both cmd line and config flags
 #
-my $test                   = 0;    # turn verbose on, but don't execute
+my $test            = 0;    # turn verbose on, but don't execute
                                    # any filesystem commands
-my $do_configtest          = 0;    # parse config file and exit
-my $one_fs                 = 0;    # one file system (don't cross
+my $do_configtest  = 0;    # parse config file and exit
+my $one_fs         = 0;    # one file system (don't cross
                                    # partitions within a backup point)
-my $link_dest              = 0;    # use the --link-dest option to rsync
-my $stop_on_stale_lockfile = 0;    # stop if there is a stale lockfile
+my $link_dest      = 0;    # use the --link-dest option to rsync
+my $allow_waiting  = 0;    # allow waiting for other instance to terminate
 
 # how much noise should we make? the default is 2
 #
@@ -302,12 +302,6 @@ chdir($config_vars{'snapshot_root'});
 # actually run the backup job
 # $cmd should store the name of the interval we'll run against
 handle_interval($cmd);
-
-# if we have a lockfile, remove it
-# however, this will have already been done if use_lazy_deletes is turned
-#   on, and there may be a lockfile from another process now in place,
-#   so in that case don't just blindly delete!
-remove_lockfile() unless ($use_lazy_deletes);
 
 # if we got this far, the program is done running
 # write to the log and syslog with the status of the outcome
@@ -1257,20 +1251,20 @@ sub parse_config_file {
 			next;
 		}
 
-		#STOP_ON_STALE_LOCKFILE
-		if ($var eq 'stop_on_stale_lockfile') {
+		#ALLOW_WAITING
+		if ($var eq 'allow_waiting') {
 			if (!defined($value)) {
-				config_err($file_line_num, "$line - stop_on_stale_lockfile can not be blank");
+				config_err($file_line_num, "$line - allow_waiting can not be blank");
 				next;
 			}
 			if (!is_boolean($value)) {
 				config_err($file_line_num,
-					"$line - \"$value\" is not a legal value for stop_on_stale_lockfile, must be 0 or 1 only");
+					"$line - \"$value\" is not a legal value for allow_waiting, must be 0 or 1 only");
 				next;
 			}
 
-			$stop_on_stale_lockfile = $value;
-			$line_syntax_ok         = 1;
+			$allow_waiting  = $value;
+			$line_syntax_ok = 1;
 			next;
 		}
 
@@ -2045,11 +2039,6 @@ sub bail {
 		linux_lvm_snapshot_del(linux_lvm_parseurl($tmp));
 	}
 
-	# get rid of the lockfile, if it exists
-	if (0 == $stop_on_stale_lockfile) {
-		remove_lockfile();
-	}
-
 	# exit showing an error
 	exit(1);
 }
@@ -2438,109 +2427,25 @@ sub add_lockfile {
 		exit(1);
 	}
 
-	# does a lockfile already exist?
-	if (1 == is_real_local_abs_path($lockfile)) {
-		if (!open(LOCKFILE, $lockfile)) {
-			print_err("Lockfile $lockfile exists and can't be read, can not continue!", 1);
-			syslog_err("Lockfile $lockfile exists and can't be read, can not continue");
-			exit(1);
-		}
-		my $pid = <LOCKFILE> || "";
-		chomp($pid);
-		close(LOCKFILE);
-		if ($pid =~ m/^[0-9]+$/ && kill(0, $pid)) {
-			print_err("Lockfile $lockfile exists and so does its process, can not continue");
-			syslog_err("Lockfile $lockfile exists and so does its process, can not continue");
-			exit(1);
-		}
-		else {
-			if (1 == $stop_on_stale_lockfile) {
-				print_err("Stale lockfile $lockfile detected. You need to remove it manually to continue", 1);
-				syslog_err("Stale lockfile $lockfile detected. Exiting.");
-				exit(1);
-			}
-			else {
-				print_warn("Removing stale lockfile $lockfile", 1);
-				syslog_warn("Removing stale lockfile $lockfile");
-				remove_lockfile();
-			}
-		}
-	}
+    if (!open(LOCKFILE, ">", $lockfile)) {
+			print_err("Lockfile $lockfile can't be read, can not continue!", 1);
+			syslog_err("Lockfile $lockfile can't be read, can not continue!");
+            exit(1);
+    }
 
-	# create the lockfile
-	print_cmd("echo $$ > $lockfile");
+    my $flags = LOCK_EX;
 
-	if (0 == $test) {
+    if($allow_waiting == 0) {
+        $flags = $flags | LOCK_NB
+    }
 
-		# sysopen() can do exclusive opens, whereas perl open() can not
-		my $result = sysopen(LOCKFILE, $lockfile, O_WRONLY | O_EXCL | O_CREAT, 0644);
-		if (!defined($result) || 0 == $result) {
-			print_err("Could not write lockfile $lockfile: $!", 1);
-			syslog_err("Could not write lockfile $lockfile");
-			exit(1);
-		}
-
-		# print PID to lockfile
-		print LOCKFILE $$;
-
-		$result = close(LOCKFILE);
-		if (!defined($result) || 0 == $result) {
-			print_warn("Could not close lockfile $lockfile: $!", 2);
-		}
-	}
-
-	return (1);
-}
-
-# accepts no arguments
-#
-# returns undef if lockfile isn't defined in the config file
-# return 1 upon success or if there's no lockfile to remove
-# warn if the PID in the lockfile is not the same as the PID of this process
-# exit with a value of 1 if it can't read the lockfile
-# exit with a value of 1 if it can't remove the lockfile
-#
-# we don't use bail() to exit on error, because that would call
-# this subroutine twice in the event of a failure
-sub remove_lockfile {
-
-	# if we don't have a lockfile defined, return undef
-	if (!defined($config_vars{'lockfile'})) {
-		return (undef);
-	}
-
-	my $lockfile = $config_vars{'lockfile'};
-	my $result   = undef;
-
-	if (-e "$lockfile") {
-		if (open(LOCKFILE, $lockfile)) {
-			my $locked_pid = <LOCKFILE> || "";
-			chomp($locked_pid);
-			close(LOCKFILE);
-			if ($locked_pid && $locked_pid != $$) {
-				print_warn(
-					"About to remove lockfile $lockfile which belongs to a different process: $locked_pid (this is OK if it's a stale lock)"
-				);
-			}
-		}
-		else {
-			print_err("Could not read lockfile $lockfile: $!", 0);
-			syslog_err("Error! Could not read lockfile $lockfile: $!");
-			exit(1);
-		}
-		print_cmd("rm -f $lockfile");
-		if (0 == $test) {
-			$result = unlink($lockfile);
-			if (0 == $result) {
-				print_err("Could not remove lockfile $lockfile", 1);
-				syslog_err("Error! Could not remove lockfile $lockfile");
-				exit(1);
-			}
-		}
-	}
-	else {
-		print_msg("No need to remove non-existent lock $lockfile", 5);
-	}
+    print_msg("Attempting to acquire lock", 4);
+    if (!flock(LOCKFILE, $flags)) {
+        print_err("Could not acquire exclusive lock for lockfile $lockfile, can not continue!", 1);
+        syslog_err("Could not acquire exclusive lock for lockfile $lockfile, can not continue!");
+        exit(1);
+    }
+    print_msg("Acquired lock", 4);
 
 	return (1);
 }
@@ -3204,11 +3109,6 @@ sub handle_interval {
 
 	# if use_lazy_delete is on, delete the _delete.$$ directory
 	if ($use_lazy_deletes) {
-
-		# Besides the _delete.$$ directory, the lockfile has to be removed as well.
-		# The reason is that the last task to do in this subroutine is to delete the _delete.$$ directory, and it can take quite a while.
-		# we remove the lockfile here since this delete shouldn't block other rsnapshot jobs from running
-		remove_lockfile();
 
 		# Check for the directory. It might not exist, e.g. in case of the 'sync' command.
 		if (-d "$config_vars{'snapshot_root'}/_delete.$$") {
@@ -6707,7 +6607,7 @@ B<config_version>     Config file version (required). Default is 1.2
 B<snapshot_root>      Local filesystem path to save all snapshots
 
 B<include_conf>       Include another file in the configuration at this point.
- 
+
 =over 4
 
 This is recursive, but you may need to be careful about paths when specifying
@@ -6782,7 +6682,7 @@ B<linux_lvm_cmd_umount>
 =over 4
 
 Paths to lvcreate, lvremove, mount and umount commands, for use with Linux
-LVMs.  You may include options to the commands also. 
+LVMs.  You may include options to the commands also.
 The lvcreate, lvremove, mount and umount commands are required for
 managing snapshots of LVM volumes and are otherwise optional.
 
@@ -6963,7 +6863,7 @@ B<rsync_long_args     --delete --numeric-ids --relative --delete-excluded>
 
 List of long arguments to pass to rsync.  The default values are
     --delete --numeric-ids --relative --delete-excluded
-This means that the directory structure in each backup point destination 
+This means that the directory structure in each backup point destination
 will match that in the backup point source.
 
 Quotes are permitted in rsync_long_args, eg --rsync-path="sudo /usr/bin/rsync".
@@ -6994,7 +6894,7 @@ features.
 
 B<lockfile    /var/run/rsnapshot.pid>
 
-B<stop_on_stale_lockfile	0>
+B<allow_waiting	0>
 
 =over 4
 
@@ -7004,13 +6904,12 @@ Make sure to use a directory that is not world writeable for security
 reasons.  Use of a lock file is strongly recommended.
 
 If a lockfile exists when rsnapshot starts, it will try to read the file
-and stop with an error if it can't.  If it *can* read the file, it sees if
-a process exists with the PID noted in the file.  If it does, rsnapshot
-stops with an error message.  If there is no process with that PID, then
-we assume that the lockfile is stale and ignore it *unless*
-stop_on_stale_lockfile is set to 1 in which case we stop.
+and stop with an error if it can't.  If rsnapshot *can* read the file, it
+attempts to acquire an exclusive lock for the file.  If allow_waiting
+is set to 1 rsnapshot will wait for the lock to become available, otherwise
+rsnapshot will stop if it fails to acquire the lock.
 
-stop_on_stale_lockfile defaults to 0.
+allow_waiting defaults to 0.
 
 =back
 
@@ -7028,7 +6927,7 @@ B<use_lazy_deletes    1>
 
 =over 4
 
-Changes default behavior of rsnapshot and does not initially remove the 
+Changes default behavior of rsnapshot and does not initially remove the
 oldest snapshot. Instead it moves that directory to _delete.[processid] and
 continues as normal. Once the backup has been completed, the lockfile will
 be removed before rsnapshot starts deleting the directory.
@@ -7074,7 +6973,7 @@ B<linux_lvm_mountpath		/mnt/lvm-snapshot>
 
 =over 4
 
-Mount point to use to temporarily mount the snapshot(s). 
+Mount point to use to temporarily mount the snapshot(s).
 
 =back
 
@@ -7174,8 +7073,8 @@ B<backup  lvm://vg0/home/path2/       lvm-vg0/>
 
 =over 4
 
-Backs up the LVM logical volume called home, of volume group vg0, to 
-<snapshot_root>/<interval>.0/lvm-vg0/. Will create, mount, backup, unmount and remove an LVM 
+Backs up the LVM logical volume called home, of volume group vg0, to
+<snapshot_root>/<interval>.0/lvm-vg0/. Will create, mount, backup, unmount and remove an LVM
 snapshot for each lvm:// entry.
 
 =back
@@ -7340,7 +7239,7 @@ If rsnapshot takes longer than 10 minutes to do the "beta" rotate
 (which usually includes deleting the oldest beta snapshot), then you
 should increase the time between the backup levels.
 Otherwise (assuming you have set the B<lockfile> parameter, as is recommended)
-your alpha snapshot will fail sometimes because the beta still has the lock.  
+your alpha snapshot will fail sometimes because the beta still has the lock.
 
 Remember that these are just the times that the program runs.
 To set the number of backups stored, set the B<retain> numbers in

@@ -126,11 +126,11 @@ loglevel	3
 #
 lockfile	/var/run/rsnapshot.pid
 
-# By default, rsnapshot check lockfile, check if PID is running
-# and if not, consider lockfile as stale, then start
-# Enabling this stop rsnapshot if PID in lockfile is not running
+# By default, rsnapshot stops if another instance has locked the
+# lockfile. If you set this value to 1 then rsnapshot will instead
+# wait for the other instance to terminate.
 #
-#stop_on_stale_lockfile		0
+#allow_waiting		0
 
 # Default rsync args. All rsync commands have at least these options set.
 #
@@ -156,8 +156,8 @@ lockfile	/var/run/rsnapshot.pid
 # The include and exclude parameters, if enabled, simply get passed directly
 # to rsync. If you have multiple include/exclude patterns, put each one on a
 # separate line. Please look up the --include and --exclude options in the
-# rsync man page for more details on how to specify file name patterns. 
-# 
+# rsync man page for more details on how to specify file name patterns.
+#
 #include	???
 #include	???
 #exclude	???
@@ -247,4 +247,3 @@ backup	/usr/local/	localhost/
 
 # RSYNC.SAMBA.ORG
 #backup	rsync://rsync.samba.org/rsyncftp/	rsync.samba.org/rsyncftp/
-
