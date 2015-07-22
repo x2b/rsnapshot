@@ -3087,7 +3087,7 @@ sub handle_interval {
 
 	# handle toggling between sync_first being enabled and disabled
 
-  exec_cmd_preexec();
+	exec_cmd_preexec();
 
 	# link_dest is enabled
 	if (1 == $link_dest) {
@@ -3113,7 +3113,7 @@ sub handle_interval {
 				if (0 == $test) {
 					$result = rm_rf("$config_vars{'snapshot_root'}/.sync/");
 					if (0 == $result) {
-            exec_cmd_postexec();
+						exec_cmd_postexec();
 						bail("Error! rm_rf(\"$config_vars{'snapshot_root'}/.sync/\")");
 					}
 				}
@@ -3142,7 +3142,7 @@ sub handle_interval {
 					if (0 == $test) {
 						$result = cp_al("$interval_0", "$sync_dir");
 						if (!$result) {
-              exec_cmd_postexec();
+							exec_cmd_postexec();
 							bail("Error! cp_al(\"$interval_0\", \"$sync_dir\")");
 						}
 					}
@@ -3160,7 +3160,7 @@ sub handle_interval {
 				if (0 == $test) {
 					$result = rm_rf("$config_vars{'snapshot_root'}/.sync/");
 					if (0 == $result) {
-            exec_cmd_postexec();
+						exec_cmd_postexec();
 						bail("Error! rm_rf(\"$config_vars{'snapshot_root'}/.sync/\")");
 					}
 				}
@@ -3208,7 +3208,7 @@ sub handle_interval {
 		# Besides the _delete.$$ directory, the lockfile has to be removed as well.
 		# The reason is that the last task to do in this subroutine is to delete the _delete.$$ directory, and it can take quite a while.
 		# we remove the lockfile here since this delete shouldn't block other rsnapshot jobs from running
-    # remove_lockfile();
+		# remove_lockfile();
 
 		# Check for the directory. It might not exist, e.g. in case of the 'sync' command.
 		if (-d "$config_vars{'snapshot_root'}/_delete.$$") {
@@ -3230,7 +3230,7 @@ sub handle_interval {
 		}
 	}
 
-  exec_cmd_postexec();
+	exec_cmd_postexec();
 }
 
 # accepts an interval_data_ref
