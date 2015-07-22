@@ -3087,6 +3087,8 @@ sub handle_interval {
 
 	# handle toggling between sync_first being enabled and disabled
 
+  exec_cmd_preexec();
+
 	# link_dest is enabled
 	if (1 == $link_dest) {
 
@@ -3111,6 +3113,7 @@ sub handle_interval {
 				if (0 == $test) {
 					$result = rm_rf("$config_vars{'snapshot_root'}/.sync/");
 					if (0 == $result) {
+            exec_cmd_postexec();
 						bail("Error! rm_rf(\"$config_vars{'snapshot_root'}/.sync/\")");
 					}
 				}
@@ -3139,6 +3142,7 @@ sub handle_interval {
 					if (0 == $test) {
 						$result = cp_al("$interval_0", "$sync_dir");
 						if (!$result) {
+              exec_cmd_postexec();
 							bail("Error! cp_al(\"$interval_0\", \"$sync_dir\")");
 						}
 					}
@@ -3156,6 +3160,7 @@ sub handle_interval {
 				if (0 == $test) {
 					$result = rm_rf("$config_vars{'snapshot_root'}/.sync/");
 					if (0 == $result) {
+            exec_cmd_postexec();
 						bail("Error! rm_rf(\"$config_vars{'snapshot_root'}/.sync/\")");
 					}
 				}
@@ -3173,10 +3178,7 @@ sub handle_interval {
 
 		# if we're doing a sync, run the pre/post exec scripts, and do the backup
 		if ($cmd eq 'sync') {
-			exec_cmd_preexec();
 			backup_lowest_interval($id_ref);
-			exec_cmd_postexec();
-
 		}
 
 		# if we're working on the lowest interval, either run the backup and rotate the snapshots, or just rotate them
@@ -3186,10 +3188,8 @@ sub handle_interval {
 				rotate_lowest_snapshots($$id_ref{'interval'});
 			}
 			else {
-				exec_cmd_preexec();
 				rotate_lowest_snapshots($$id_ref{'interval'});
 				backup_lowest_interval($id_ref);
-				exec_cmd_postexec();
 			}
 		}
 
@@ -3208,7 +3208,7 @@ sub handle_interval {
 		# Besides the _delete.$$ directory, the lockfile has to be removed as well.
 		# The reason is that the last task to do in this subroutine is to delete the _delete.$$ directory, and it can take quite a while.
 		# we remove the lockfile here since this delete shouldn't block other rsnapshot jobs from running
-		remove_lockfile();
+    # remove_lockfile();
 
 		# Check for the directory. It might not exist, e.g. in case of the 'sync' command.
 		if (-d "$config_vars{'snapshot_root'}/_delete.$$") {
@@ -3229,6 +3229,8 @@ sub handle_interval {
 			print_msg("No directory to delete: $config_vars{'snapshot_root'}/_delete.$$", 5);
 		}
 	}
+
+  exec_cmd_postexec();
 }
 
 # accepts an interval_data_ref
@@ -6707,7 +6709,7 @@ B<config_version>     Config file version (required). Default is 1.2
 B<snapshot_root>      Local filesystem path to save all snapshots
 
 B<include_conf>       Include another file in the configuration at this point.
- 
+
 =over 4
 
 This is recursive, but you may need to be careful about paths when specifying
@@ -6756,8 +6758,8 @@ B<cmd_preexec>
 =over 4
 
 Full path (plus any arguments) to preexec script (optional).
-This script will run immediately before each backup operation (but not any
-rotations). If the execution fails, rsnapshot will stop immediately.
+This script will run immediately before each backup operation.
+If the execution fails, rsnapshot will stop immediately.
 
 =back
 
@@ -6766,8 +6768,8 @@ B<cmd_postexec>
 =over 4
 
 Full path (plus any arguments) to postexec script (optional).
-This script will run immediately after each backup operation (but not any
-rotations). If the execution fails, rsnapshot will stop immediately.
+This script will run immediately after each backup operation.
+If the execution fails, rsnapshot will stop immediately.
 
 =back
 
@@ -6782,7 +6784,7 @@ B<linux_lvm_cmd_umount>
 =over 4
 
 Paths to lvcreate, lvremove, mount and umount commands, for use with Linux
-LVMs.  You may include options to the commands also. 
+LVMs.  You may include options to the commands also.
 The lvcreate, lvremove, mount and umount commands are required for
 managing snapshots of LVM volumes and are otherwise optional.
 
@@ -6963,7 +6965,7 @@ B<rsync_long_args     --delete --numeric-ids --relative --delete-excluded>
 
 List of long arguments to pass to rsync.  The default values are
     --delete --numeric-ids --relative --delete-excluded
-This means that the directory structure in each backup point destination 
+This means that the directory structure in each backup point destination
 will match that in the backup point source.
 
 Quotes are permitted in rsync_long_args, eg --rsync-path="sudo /usr/bin/rsync".
@@ -7028,7 +7030,7 @@ B<use_lazy_deletes    1>
 
 =over 4
 
-Changes default behavior of rsnapshot and does not initially remove the 
+Changes default behavior of rsnapshot and does not initially remove the
 oldest snapshot. Instead it moves that directory to _delete.[processid] and
 continues as normal. Once the backup has been completed, the lockfile will
 be removed before rsnapshot starts deleting the directory.
@@ -7074,7 +7076,7 @@ B<linux_lvm_mountpath		/mnt/lvm-snapshot>
 
 =over 4
 
-Mount point to use to temporarily mount the snapshot(s). 
+Mount point to use to temporarily mount the snapshot(s).
 
 =back
 
@@ -7174,8 +7176,8 @@ B<backup  lvm://vg0/home/path2/       lvm-vg0/>
 
 =over 4
 
-Backs up the LVM logical volume called home, of volume group vg0, to 
-<snapshot_root>/<interval>.0/lvm-vg0/. Will create, mount, backup, unmount and remove an LVM 
+Backs up the LVM logical volume called home, of volume group vg0, to
+<snapshot_root>/<interval>.0/lvm-vg0/. Will create, mount, backup, unmount and remove an LVM
 snapshot for each lvm:// entry.
 
 =back
@@ -7340,7 +7342,7 @@ If rsnapshot takes longer than 10 minutes to do the "beta" rotate
 (which usually includes deleting the oldest beta snapshot), then you
 should increase the time between the backup levels.
 Otherwise (assuming you have set the B<lockfile> parameter, as is recommended)
-your alpha snapshot will fail sometimes because the beta still has the lock.  
+your alpha snapshot will fail sometimes because the beta still has the lock.
 
 Remember that these are just the times that the program runs.
 To set the number of backups stored, set the B<retain> numbers in
